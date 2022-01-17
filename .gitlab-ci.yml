@@ -1,0 +1,282 @@
+Skip to content
+Search...
+
+Log in
+Create account
+
+6
+
+2
+
+6
+
+Liptan Biswas
+Liptan Biswas
+Posted on 23 Oct 2020 • Updated on 13 Feb 2021
+
+Gitlab Docker Layer Caching for Kubernetes Executor
+#
+kubernetes
+#
+gitlab
+#
+docker
+#
+caching
+Now that Gitlab reduced the CI/CD minutes for free plans to 400. It's possible you might run out of CI/CD time. You can upgrade to higher plans, or you have the option to host your own runner.
+
+We use our own runners since we migrated to Gitlab from Github. There are various benefits for running the Gitlab runner in your own environment. A few of the important features are:
+
+You are no more concerned about accidentally exposing credentials since you are not using shared infrastructures.
+You can leverage instance role-based credentials to authenticate to your cloud provider.
+No more limits on the CI/CD minutes you can use.
+In terms of operational overhead, since we use Kubernetes, it was just a click of a button for us to deploy the runner.
+We were using Docker in Docker workflow described here to build our docker images. On every build, GitLab starts a pod with 3 containers, one of them being a Docker dind container running the docker daemon. The build container would connect to the Docker daemon running on the same pod. Since all containers in a pod share the same network. Docker client building the image was able to connect to the daemon API over the localhost.
+
+The problem we were facing that there was no caching of docker layers. This was because a fresh pod with a fresh docker daemon service was spun up on every build. This increased our build time significantly.
+
+The solution to this problem is very simple. There were many options. We chose the simplest one. Instead of running Docker dind as a service for every pod, let's just run one Docker dind container. All Docker clients building the containers would connect to that same Docker daemon thus docker layer caching will also work. There is an option to bind the runner pod to the docker socket, running on the host itself, but we shouldn't do that for obvious reasons.
+
+Create the PVC to store the persistent data of Docker.
+# PVC for storing dind data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app: docker-dind
+  name: docker-dind-data
+  namespace: gitlab-managed-apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+We are using a managed GKE cluster, so our Persistent volume is automatically created by controllers.
+
+Here's the deployment spec for the Docker Dind pod which is going to provide docker services to Gitlab docker runner.
+## Deployment for docker-dind
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: docker-dind
+  name: docker-dind
+  namespace: gitlab-managed-apps
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: docker-dind
+  template:
+    metadata:
+      labels:
+        app: docker-dind
+    spec:
+      containers:
+        - image: docker:19.03-dind
+          name: docker-dind
+          env:
+            - name: DOCKER_HOST
+              value: tcp://0.0.0.0:2375
+            - name: DOCKER_TLS_CERTDIR #Disable TLS as traffic is not going outside of network.
+              value: ""
+          volumeMounts:
+            - name: docker-dind-data-vol #Persisting the docker data
+              mountPath: /var/lib/docker/
+          ports:
+            - name: daemon-port
+              containerPort: 2375
+              protocol: TCP
+          securityContext:
+            privileged: true #Required for dind container to work.
+      volumes:
+        - name: docker-dind-data-vol
+          persistentVolumeClaim:
+            claimName: docker-dind-data
+Now, expose the service, so Gitlab runners can connect with it.
+## Service for exposing docker-dind
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: docker-dind
+  name: docker-dind
+  namespace: gitlab-managed-apps
+spec:
+  ports:
+    - port: 2375
+      protocol: TCP
+      targetPort: 2375
+  selector:
+    app: docker-dind
+Once this is done, you can use the docker daemon in a Gitlab CI job spec file like this.
+stages:
+  - image
+
+create_image:
+  stage: image
+  image: docker:git
+  variables:
+    DOCKER_HOST: tcp://docker-dind:2375 #IMPORTANT, this tells docker client to connect to docker-dind service we created
+  script:
+    - docker info
+    - docker build -t yourorg/app:${CI_COMMIT_TAG} .
+    - docker push yourorg/app:${CI_COMMIT_TAG}
+  only:
+    - tags
+Our build time is now significantly reduced, thanks to docker layer caching.
+
+One last thing, here's a Cronjob that clears the cache every week. So we can start fresh.
+# Cronjob to clear docker cache every monday so we start fresh
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  labels:
+    app: docker-dind
+  namespace: gitlab-managed-apps
+  name: docker-dind-clear-cache
+spec:
+  jobTemplate:
+    metadata:
+      labels:
+        app: docker-dind
+      name: docker-dind-clear-cache
+    spec:
+      template:
+        spec:
+          containers:
+            - command:
+                - docker
+                - system
+                - prune
+                - -af
+              image: docker:git
+              name: docker-dind-clear-cache
+              env:
+                - name: DOCKER_HOST
+                  value: tcp://docker-dind:2375
+          restartPolicy: OnFailure
+  schedule: 0 0 * * 0
+That's it.
+
+Discussion (6)
+Subscribe
+pic
+Add to the discussion
+ 
+alexanderkjeldaas profile image
+Alexander Kjeldaas
+•
+Sep 22 '21
+
+Do you know how to also not start the docker-dind service for each build?
+
+
+1
+ like
+Reply
+ 
+riscie profile image
+riscie
+•
+May 19 '21
+
+Very well done and explained!
+
+
+1
+ like
+Reply
+ 
+gajus profile image
+Gajus Kuizinas
+•
+Apr 8 '21
+
+Doesn't this limit to at most one build at a time?
+
+
+1
+ like
+Reply
+ 
+gajus profile image
+Gajus Kuizinas
+•
+Feb 12 '21
+
+What are the potential downsides of this approach?
+
+
+1
+ like
+Reply
+ 
+liptanbiswas profile image
+Liptan Biswas 
+•
+Feb 13 '21
+
+Worked pretty well for me. Take it for a spin and if you find some, you can post here.
+
+
+1
+ like
+Reply
+ 
+laurenzglueck profile image
+Laurenz Glück
+•
+Jan 9 '21
+
+Thanks for your short tutorial - saved me a lot of time! 👍🏼
+
+
+2
+ likes
+Reply
+Code of Conduct • Report abuse
+Read next
+martinpham profile image
+Automatic deployment to GIT branch with GitHub workflow
+Martin Pham - Nov 9 '21
+
+ankit01oss profile image
+7 GitHub projects to supercharge your Docker practices 🚀🧑‍💻
+Ankit Anand ✨ - Oct 23 '21
+
+jryther profile image
+Getting Started with Docker 🐋
+Josh - Nov 6 '21
+
+leewalter profile image
+How to learn and practice more in Kubernetes Network Policy for CKx exams and EKS ?
+Walter Lee - Nov 7 '21
+
+
+Liptan Biswas
+Follow
+LOCATION
+India
+WORK
+DevOps Engineer
+JOINED
+8 Sept 2020
+More from Liptan Biswas
+CKAD Practice Questions
+#ckad #cka #kubernetes #certification
+stages:
+  - image
+
+create_image:
+  stage: image
+  image: docker:git
+  variables:
+    DOCKER_HOST: tcp://docker-dind:2375 #IMPORTANT, this tells docker client to connect to docker-dind service we created
+  script:
+    - docker info
+    - docker build -t yourorg/app:${CI_COMMIT_TAG} .
+    - docker push yourorg/app:${CI_COMMIT_TAG}
+  only:
+    - tags

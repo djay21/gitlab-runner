@@ -1,0 +1,15 @@
+## Service for exposing docker-dind
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: docker-dind
+  name: docker-dind
+  namespace: gitlab-runners
+spec:
+  ports:
+    - port: 2375
+      protocol: TCP
+      targetPort: 2375
+  selector:
+    app: docker-dind
