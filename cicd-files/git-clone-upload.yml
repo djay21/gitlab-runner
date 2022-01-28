@@ -2,8 +2,6 @@ stages:
   - push-git
 
 before_script:
-  - git config user.name "automation"
-  - git config user.email "automation@devops.com"
   - url_host=`git remote get-url origin | sed -e "s/https:\/\/gitlab-ci-token:.*@//g"`
   - git remote set-url origin "https://gitlab-ci-token:${CI_GIT_TOKEN}@${url_host}"
 
@@ -26,6 +24,11 @@ pushgit:
   stage: push-git 
   image: bitnami/git:latest
   script:
+    - url_host=`git remote get-url origin | sed -e "s/https:\/\/gitlab-ci-token:.*@//g"`
+    - git remote set-url origin "https://gitlab-ci-token:${CI_GIT_TOKEN}@${url_host}"
+    - git clone ${url_host} -b automation_branch
+    - git config user.name "automation"
+    - git config user.email "automation@devops.com"
     - | 
       cat << ADD > add.txt
         ids = "$id"
@@ -35,7 +38,7 @@ pushgit:
       ADD 
     - ls -lrt
     - cat add.txt
-    - sed -i "/tenant_list/r add.txt" ./env/${ENV_NAME}.tfvars
+    - sed -i "/abc/r add.txt" ./env/${ENV_NAME}.tfvars
     - rm -rf add.txt
     - git add . 
     - git status

@@ -1,0 +1,97 @@
+workflow:
+  rules:
+    - if: $CI_COMMIT_REF_NAME == "develop" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "develop"
+      variables:
+        PROJECT: $DEV_PROJECT
+        BUCKET: $DEV_BUCKET
+        KEY: $DEV_KEY
+    - if: $CI_COMMIT_REF_NAME == "staging" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "staging"
+      variables:
+        PROJECT: $STG_PROJECT
+        BUCKET: $STG_BUCKET
+        KEY: $STG_KEY
+    - if: $CI_COMMIT_REF_NAME == "main" || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "main"
+      variables:
+        PROJECT: $PROD_PROJECT
+        BUCKET: $PROD_BUCKET
+        KEY: $PROD_KEY
+    - when: always
+
+default:
+  image: google/cloud-sdk:latest
+
+before_script:
+  - echo $KEY > /tmp/key.json
+  - gcloud auth activate-service-account --key-file=/tmp/key.json
+  - gcloud config set project $PROJECT
+
+stages:
+  - a
+  - d
+  - c
+  - b
+
+unit-test:
+  stage: .pre
+  image: python:3.9-slim
+  script:
+    - apt update && apt install git -y
+    - git diff --name-only $CI_COMMIT_BEFORE_SHA $CI_COMMIT_SHA > changed_files.txt
+    - service=$(cat changed_files.txt | grep -E 'a|b|c|d' | cut -d "-" -f 1 | uniq)
+    - for i in  ${services}*/; do pip install -r requirements.txt ; python -m unittest discover ./test -p '*.py'; done 
+
+
+cloudfunction-a:
+  stage: a
+  needs: [unit-test]
+  script:
+    - export $a_CONFIG
+    - cd a*/ 
+    - gcloud functions deploy $FUNCTION_NAME --entry-point main --runtime python39 --trigger-resource $CF_TOPIC_NAME --trigger-event google.pubsub.topic.publish --allow-unauthenticated --region $REGION --vpc-connector $VPC_CONNECTOR --service-account $CF_SA_NAME
+  only:
+    refs:
+      - merge_requests
+    changes:
+      - a*/*
+
+
+cloudfunction-b:
+  stage: b
+  needs: [unit-test]
+  script:
+    - export $b_CONFIG
+    - cd b*/ 
+  only:
+    refs:
+      - merge_requests
+    changes:
+      - b*/*
+
+cloudfunction-c:
+  stage: c
+  needs: [unit-test]
+  script:
+    - export $c_CONFIG
+    - cd c*/
+    - gcloud functions deploy $FUNCTION_NAME --entry-point main --runtime python37 --trigger-http --allow-unauthenticated --region $REGION --service-account $CF_SA_NAME --vpc-connector $VPC_CONNECTOR
+  only:
+    refs:
+      - merge_requests
+    changes:
+      - c*/*
+
+cloudfunction-d:
+  stage: d
+  needs: [unit-test]
+  script:
+    - export $d_CONFIG
+    - cd dev*/
+  only:
+    refs:
+      - merge_requests
+    changes:
+      - d*/*
+
+
+
+
