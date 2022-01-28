@@ -1,0 +1,28 @@
+steps:
+  - name: gcr.io/cloud-builders/gcloud
+    args:
+      - '-c'
+      - |
+        echo "$$SSHKEY"
+        apt update && apt install maven zip -y
+        mkdir ~/.ssh /target && ssh-keyscan -t rsa gitlab.com >> ~/.ssh/known_hosts
+        chmod 600 -R ~/.ssh 
+        git clone "https://$$SSHKEY@gitlab.com/nodejs.git" -b v1 && cd de_*/
+        ls -la 
+        cd eve*/
+        mvn -Dmaven.repo.local=/target clean install
+        gsutil cp target/event*.jar gs://dev 
+        gsutil cp -r /target gs://dev/hello 
+        mv target/event*.jar /target
+        ls -la /target
+        pwd 
+    entrypoint: bash
+    secretEnv:
+      - SSHKEY
+timeout: 3600s
+options:
+  logging: CLOUD_LOGGING_ONLY
+availableSecrets:
+  secretManager:
+    - versionName: projects/34542/secrets/gitlab-poc-var/versions/2
+      env: SSHKEY
