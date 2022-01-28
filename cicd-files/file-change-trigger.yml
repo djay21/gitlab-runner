@@ -38,16 +38,14 @@ unit-test:
     - apt update && apt install git -y
     - git diff --name-only $CI_COMMIT_BEFORE_SHA $CI_COMMIT_SHA > changed_files.txt
     - service=$(cat changed_files.txt | grep -E 'a|b|c|d' | cut -d "-" -f 1 | uniq)
-    - for i in  ${services}*/; do pip install -r requirements.txt ; python -m unittest discover ./test -p '*.py'; done 
+    - for i in  ${services}*/; do pip install -r requirements.txt ; python '*.py'; done 
 
 
 cloudfunction-a:
   stage: a
   needs: [unit-test]
   script:
-    - export $a_CONFIG
     - cd a*/ 
-    - gcloud functions deploy $FUNCTION_NAME --entry-point main --runtime python39 --trigger-resource $CF_TOPIC_NAME --trigger-event google.pubsub.topic.publish --allow-unauthenticated --region $REGION --vpc-connector $VPC_CONNECTOR --service-account $CF_SA_NAME
   only:
     refs:
       - merge_requests
@@ -59,7 +57,6 @@ cloudfunction-b:
   stage: b
   needs: [unit-test]
   script:
-    - export $b_CONFIG
     - cd b*/ 
   only:
     refs:
@@ -71,9 +68,7 @@ cloudfunction-c:
   stage: c
   needs: [unit-test]
   script:
-    - export $c_CONFIG
     - cd c*/
-    - gcloud functions deploy $FUNCTION_NAME --entry-point main --runtime python37 --trigger-http --allow-unauthenticated --region $REGION --service-account $CF_SA_NAME --vpc-connector $VPC_CONNECTOR
   only:
     refs:
       - merge_requests
@@ -84,7 +79,6 @@ cloudfunction-d:
   stage: d
   needs: [unit-test]
   script:
-    - export $d_CONFIG
     - cd dev*/
   only:
     refs:
